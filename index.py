@@ -1,6 +1,9 @@
+import torch
 from torch.utils.data import Dataset
+from torch.utils.data import random_split
 from torchvision import transforms as T  
-from torchvision.datasets.utils import download_url 
+from torchvision.datasets.utils import download_url  
+from torchvision.utils import make_grid
 
 from PIL import Image 
 import matplotlib.pyplot as plt
@@ -9,10 +12,6 @@ from pathlib import Path
 
 DATA_DIR  = Path("data") 
 
-transforms = T.Compose([
-    T.Resize((64, 64)),
-    T.ToTensor()
-])
 
 """Load all the image paths in the directory"""
 files = list(DATA_DIR.glob("./*/*.jpg"))
@@ -48,8 +47,8 @@ class PetsDataset(Dataset):
         super().__init__() 
         self.root = root 
         self.files = list(root.glob("./*/*.jpg")) 
-        self.classes = list(set(parse_breed(fname) for fname in files))
-        self.class_to_idx = {label: index for index, label in enumerate(self.classes)} 
+        self.classes = sorted(list(set(parse_breed(fname) for fname in files)))
+        self.class_idx = {label: index for index, label in enumerate(self.classes)} 
         self.transform = transform  
        
     def __len__(self): 
@@ -58,10 +57,41 @@ class PetsDataset(Dataset):
     def __getitem__(self, index):
         fname = self.files[index] 
         img = self.transform(open_image(fname)) 
-        class_idx = self.class_to_idx[parse_breed(fname)]
+        class_idx = self.class_idx[parse_breed(fname)]
         return img, class_idx 
 
+img_size = 224 
+imagenet_stats = ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) 
+tfms = T.Compose([
+    T.Resize(img_size),
+    T.Pad(8, padding_mode="reflect"), 
+    T.RandomCrop(img_size),
+    T.ToTensor(), 
+    T.Normalize(*imagenet_stats)
+])
 
-dataset = PetsDataset(DATA_DIR, transforms) 
-print(len(dataset))
+dataset = PetsDataset(DATA_DIR, tfms) 
+classes = dataset.classes
+def denormalize(images: torch.Tensor, means, stds): 
+    if len(images.shape) == 3:
+        images = images.unsqueeze(0) 
+    means = torch.tensor(means).reshape(1, 3, 1, 1)
+    stds = torch.tensor(stds).reshape(1, 3, 1, 1) 
+    return images * stds + means  
+
+def show_image(img_tensor, label): 
+    img_tensor = denormalize(img_tensor, *imagenet_stats)[0].permute((1, 2, 0)) 
+    plt.figure(figsize=(10, 15))
+    plt.imshow(img_tensor) 
+    plt.title(f"Label: {classes[label]}") 
+
+#show_image(*dataset[5000]) 
+
+val_pct = 0.1 
+val_size = int(val_pct * len(dataset)) 
+train_size = len(dataset) - val_size 
+
+train_ds, val_ds = random_split(dataset, [train_size, val_size]) 
+
+print(len(train_ds, val_ds))
 
