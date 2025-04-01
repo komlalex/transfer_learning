@@ -1,6 +1,10 @@
 import torch
+import torch.nn.functional as F
+import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import random_split
+
+from torchvision import models
 from torchvision import transforms as T  
 from torchvision.datasets.utils import download_url  
 from torchvision.utils import make_grid
@@ -92,8 +96,8 @@ BATCH_SIZE = 256
 val_pct = 0.1 
 val_size = int(val_pct * len(dataset)) 
 train_size = len(dataset) - val_size 
+train_ds, val_ds = random_split(dataset, [train_size, val_size])  
 
-train_ds, val_ds = random_split(dataset, [train_size, val_size]) 
 train_dl = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, pin_memory=True)
 val_dl = DataLoader(val_ds, batch_size=BATCH_SIZE*2, pin_memory=True) 
 
@@ -108,5 +112,73 @@ for batch in train_dl:
     show_batch(batch) 
     break 
 
-plt.show()
+"""Define accuracy function"""
+def accuracy(outputs, labels): 
+    preds = torch.argmax(outputs, dim=1) 
+    return torch.tensor(torch.sum(preds == labels).item() / len(preds)) 
+
+
+class ImageClassificationBase(nn.Module):  
+    def train_step(self, batch): 
+        images, labels = batch 
+        out = self(images)  # Generate predictions
+        loss = F.cross_entropy(out, labels) # Calculate loss
+        return loss 
+    
+    def validation_step(self, batch): 
+        images, labels = batch 
+        out = self(images)        # Generate predictions 
+        loss = F.cross_entropy(out, labels) # Calcuate the loss
+        acc = accuracy(out, labels)     # Calculate accuracy
+        return {"val_loss": loss, "val_acc": acc}  
+    
+    def validation_epoch_ends(self, outputs): 
+        batch_losses = [x["val_loss"] for x in outputs] 
+        epoch_loss = torch.stack(batch_losses).mean().item() 
+        batch_accs = [x["val_acc"] for x in outputs] 
+        epoch_acc = torch.stack(batch_accs).mean().item() 
+        return {"val_loss": epoch_loss, "val_acc": epoch_acc} 
+    
+    def epoch_end(self, epoch, result): 
+        print(f"\33[32m Epoch: {epoch} | val_loss: {result["val_loss"]:.4f} | val_acc: {result["val_acc"]:.4f}")
+
+
+class PetsModel(ImageClassificationBase): 
+    def __init__(self, num_classes, pretrained=True):
+        super().__init__() 
+        # Use a pretrained model 
+        self.network = models.resnet34(pretrained=pretrained) 
+        # Replace last layer 
+        self.network.fc = nn.Linear(self.network.fc.in_features, num_classes) 
+
+    def forward(self, xb): 
+        return self.network(xb) 
+    
+print(models.resnet34(pretrained=True)) 
+
+"""GPU Utilities and Training Loop""" 
+def get_default_device(): 
+    """Pick GPU if available, else CPU""" 
+    if torch.cuda.is_available(): 
+        return torch.device("cuda") 
+    return torch.device("cpu") 
+
+def to_device(data, device): 
+    if isinstance(data, (list, tuple)): 
+        return [to_device(x) for x in data] 
+    return data.to(device) 
+
+class DeviceDataLoader: 
+    def __init__(self, dl, device):
+        self.dl = dl 
+        self.device = device 
+
+    def __iter(self): 
+        for batch in self.dl: 
+            yield to_device(batch, self.device) 
+    
+    def __iter(self): 
+        return len(self.dl)
+
+        
 
