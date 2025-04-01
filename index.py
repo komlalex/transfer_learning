@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import random_split
 from torchvision import transforms as T  
 from torchvision.datasets.utils import download_url  
@@ -72,7 +72,7 @@ tfms = T.Compose([
 
 dataset = PetsDataset(DATA_DIR, tfms) 
 classes = dataset.classes
-def denormalize(images: torch.Tensor, means, stds): 
+def denormalize(images: torch.Tensor, means=imagenet_stats[0], stds=imagenet_stats[1]): 
     if len(images.shape) == 3:
         images = images.unsqueeze(0) 
     means = torch.tensor(means).reshape(1, 3, 1, 1)
@@ -80,18 +80,33 @@ def denormalize(images: torch.Tensor, means, stds):
     return images * stds + means  
 
 def show_image(img_tensor, label): 
-    img_tensor = denormalize(img_tensor, *imagenet_stats)[0].permute((1, 2, 0)) 
+    img_tensor = denormalize(img_tensor)[0].permute((1, 2, 0)) 
     plt.figure(figsize=(10, 15))
     plt.imshow(img_tensor) 
     plt.title(f"Label: {classes[label]}") 
 
 #show_image(*dataset[5000]) 
 
+"""Create training and validation datasets"""
+BATCH_SIZE = 256
 val_pct = 0.1 
 val_size = int(val_pct * len(dataset)) 
 train_size = len(dataset) - val_size 
 
 train_ds, val_ds = random_split(dataset, [train_size, val_size]) 
+train_dl = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, pin_memory=True)
+val_dl = DataLoader(val_ds, batch_size=BATCH_SIZE*2, pin_memory=True) 
 
-print(len(train_ds, val_ds))
+def show_batch(batch): 
+    images, _ = batch
+    plt.figure(figsize=(16, 16))
+    images = denormalize(images[:64]) 
+    plt.imshow(make_grid(images, nrow=8).permute(1, 2, 0)) 
+    plt.axis(False)
+
+for batch in train_dl: 
+    show_batch(batch) 
+    break 
+
+plt.show()
 
