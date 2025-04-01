@@ -9,6 +9,10 @@ from pathlib import Path
 
 DATA_DIR  = Path("data") 
 
+transforms = T.Compose([
+    T.Resize((64, 64)),
+    T.ToTensor()
+])
 
 """Load all the image paths in the directory"""
 files = list(DATA_DIR.glob("./*/*.jpg"))
@@ -22,6 +26,9 @@ def parse_breed(fname):
     return " ".join(parts[:-1])  
 
 #print(parse_breed(files[5000]))  
+#classes = list(set(parse_breed(fname) for fname in files)) 
+#print(len(classes))
+
 
 """Open the image"""
 def open_image(path): 
@@ -34,4 +41,27 @@ plt.figure(figsize=(10, 15))
 plt.imshow(open_image(files[5000]))
 plt.title(parse_breed(files[5000]))
 plt.axis(False)
-plt.show() 
+
+"""Create a Custom PyTorch Dataset""" 
+class PetsDataset(Dataset): 
+    def __init__(self, root, transform):
+        super().__init__() 
+        self.root = root 
+        self.files = list(root.glob("./*/*.jpg")) 
+        self.classes = list(set(parse_breed(fname) for fname in files))
+        self.class_to_idx = {label: index for index, label in enumerate(self.classes)} 
+        self.transform = transform  
+       
+    def __len__(self): 
+        return len(self.files) 
+    
+    def __getitem__(self, index):
+        fname = self.files[index] 
+        img = self.transform(open_image(fname)) 
+        class_idx = self.class_to_idx[parse_breed(fname)]
+        return img, class_idx 
+
+
+dataset = PetsDataset(DATA_DIR, transforms) 
+print(len(dataset))
+
