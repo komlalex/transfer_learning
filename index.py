@@ -13,12 +13,14 @@ from torchvision.utils import make_grid
 from PIL import Image 
 import matplotlib.pyplot as plt
 import os 
+import sys
 from pathlib import Path 
 from tqdm.auto import tqdm 
 
 DATA_DIR  = Path("data") 
 
-
+print(dir(models)) 
+sys.exit()
 """Load all the image paths in the directory"""
 files = list(DATA_DIR.glob("./*/*.jpg"))
 #print(len(files))
@@ -294,3 +296,5 @@ history += [fit_one_cycle(epochs, max_lr, model2, train_dl, val_dl,
                          opt_func=opt_func) 
 ] 
 
+"""While the pretrained model reached an accuracy of 80% in 6 epochs, the 
+model without the pre-trained weights could only reach an accuracy of 24%"""
