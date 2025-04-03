@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
+import torch.optim.adam
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import random_split
 
@@ -12,7 +13,8 @@ from torchvision.utils import make_grid
 from PIL import Image 
 import matplotlib.pyplot as plt
 import os 
-from pathlib import Path
+from pathlib import Path 
+from tqdm.auto import tqdm 
 
 DATA_DIR  = Path("data") 
 
@@ -119,7 +121,7 @@ def accuracy(outputs, labels):
 
 
 class ImageClassificationBase(nn.Module):  
-    def train_step(self, batch): 
+    def training_step(self, batch): 
         images, labels = batch 
         out = self(images)  # Generate predictions
         loss = F.cross_entropy(out, labels) # Calculate loss
@@ -139,8 +141,8 @@ class ImageClassificationBase(nn.Module):
         epoch_acc = torch.stack(batch_accs).mean().item() 
         return {"val_loss": epoch_loss, "val_acc": epoch_acc} 
     
-    def epoch_end(self, epoch, result): 
-        print(f"\33[32m Epoch: {epoch} | val_loss: {result["val_loss"]:.4f} | val_acc: {result["val_acc"]:.4f}")
+    def epoch_ends(self, epoch, result): 
+        print(f"\33[32m Epoch: {epoch} | train_loss: {result["train_loss"]:.4f} | val_loss: {result["val_loss"]:.4f} | val_acc: {result["val_acc"]:.4f}")
 
 
 class PetsModel(ImageClassificationBase): 
@@ -154,31 +156,141 @@ class PetsModel(ImageClassificationBase):
     def forward(self, xb): 
         return self.network(xb) 
     
-print(models.resnet34(pretrained=True)) 
 
 """GPU Utilities and Training Loop""" 
 def get_default_device(): 
     """Pick GPU if available, else CPU""" 
     if torch.cuda.is_available(): 
-        return torch.device("cuda") 
-    return torch.device("cpu") 
+        return torch.device("cuda")  
+    else:
+        return torch.device("cpu") 
 
 def to_device(data, device): 
     if isinstance(data, (list, tuple)): 
-        return [to_device(x) for x in data] 
+        return [to_device(x, device) for x in data] 
     return data.to(device) 
 
-class DeviceDataLoader: 
+class DeviceDataLoader(): 
     def __init__(self, dl, device):
         self.dl = dl 
         self.device = device 
 
-    def __iter(self): 
+    def __iter__(self): 
         for batch in self.dl: 
             yield to_device(batch, self.device) 
     
-    def __iter(self): 
-        return len(self.dl)
+    def __len__(self): 
+        return len(self.dl) 
+    
 
-        
+def evalaute(model: nn.Module, val_dl): 
+    model.eval() 
+    with torch.inference_mode(): 
+        outputs = [model.validation_step(batch) for batch in val_dl] 
+        return model.validation_epoch_ends(outputs)  
+    
+def fit(epochs ,lr, model: nn.Module, train_dl, val_dl, opt_fuc = torch.optim.SGD): 
+    history = [] 
+    optimizer = opt_fuc(model.parameters(), lr) 
+    for epoch in range(epochs): 
+        # Training Phase 
+        model.train() 
+        train_losses = [] 
+        for batch in tqdm(train_dl): 
+            loss = model.training_step(batch) 
+            train_losses.append(loss)  
+            loss.backward() 
+            optimizer.step() 
+            optimizer.zero_grad() 
+
+        # Validation Phase 
+        result = evalaute(model, val_dl) 
+        result["train_loss"] = torch.stack(train_losses).mean().item() 
+        model.epoch_ends(epoch, result) 
+        history.append(result) 
+    return history 
+
+def get_lr(optimizer: torch.optim.Optimizer): 
+    for param_group in optimizer.param_groups: 
+        return param_group["lr"] 
+    
+def fit_one_cycle(epochs: int, max_lr: float, model: nn.Module, train_dl: DataLoader, val_dl: DataLoader, 
+                  weight_decay=0, grad_clip=None, opt_func= torch.optim.SGD): 
+    torch.cuda.empty_cache() 
+    history = [] 
+
+    # Set up custom optimizer with weight decay 
+    optimizer = opt_func(model.parameters(), weight_decay=weight_decay) 
+
+    # Set up on-cycle learning rate scheduler 
+    sched = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, 
+                                                epochs=epochs,
+                                                max_lr=max_lr, 
+                                                steps_per_epoch=len(train_dl)) 
+    
+    for epoch in range(epochs): 
+        # Training Phase 
+        model.train() 
+        train_losses = [] 
+        lrs = [] 
+        for batch in tqdm(train_dl): 
+            loss = model.training_step(batch) 
+            train_losses.append(loss) 
+            loss.backward() 
+            
+            # Gradient clipping 
+            if grad_clip: 
+                nn.utils.clip_grad_value_(model.parameters(), grad_clip) 
+
+            optimizer.step() 
+            optimizer.zero_grad() 
+
+            # Record & update learning rate 
+            lrs.append(get_lr(optimizer)) 
+            sched.step()  
+
+
+        # Validation Phase 
+        result = evalaute(model, val_dl) 
+        result["train_loss"] = torch.stack(train_losses).mean().item() 
+        result["lrs"] = lrs  
+        model.epoch_ends(epoch, result)
+        history.append(result) 
+    return history 
+
+device = get_default_device() 
+
+train_dl = DeviceDataLoader(train_dl, device) 
+val_dl = DeviceDataLoader(val_dl, device)  
+
+"""Finetuning the Pretrained Model""" 
+model = PetsModel(len(dataset.classes)) 
+to_device(model, device)
+history = evalaute(model, val_dl)
+print(history)
+
+epochs = 6 
+max_lr = 0.01 
+grad_clip = 0.1 
+weight_decay = 1e-4 
+opt_func = torch.optim.Adam 
+
+history += fit_one_cycle(epochs, max_lr, model, train_dl, val_dl, 
+                        grad_clip=grad_clip, 
+                        weight_decay=weight_decay, 
+                        opt_func=opt_func)
+
+"""Training the Model from Scratch 
+Let's repeat the training without using the weights from the pretrained ResNet34 model
+""" 
+
+model2 = PetsModel(len(dataset.classes), pretrained=False)
+to_device(model2, device) 
+history2 = evalaute(model2, val_dl) 
+
+history += [fit_one_cycle(epochs, max_lr, model2, train_dl, val_dl, 
+                         grad_clip=grad_clip, 
+                         weight_decay=weight_decay, 
+                         opt_func=opt_func) 
+] 
 
